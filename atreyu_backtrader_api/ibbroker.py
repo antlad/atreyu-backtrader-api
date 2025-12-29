@@ -332,13 +332,28 @@ class IBBroker(with_metaclass(MetaIBBroker, BrokerBase)):
         return o.status
 
     def submit(self, order):
-        order.submit(self)
+        # Check if this is a crypto order
+        is_crypto = hasattr(order.data, 'tradecontract') and \
+                    hasattr(order.data.tradecontract, 'secType') and \
+                    order.data.tradecontract.secType == 'CRYPTO'
 
-        # ocoize if needed
-        if order.oco is None:  # Generate a UniqueId
-            order.ocaGroup = bytes(uuid.uuid4())
-        else:
+        # CRITICAL: Set OCA values BEFORE calling order.submit() which finalizes the order
+        # For crypto, NEVER set OCA group (IBKR doesn't support it)
+        if is_crypto:
+            order.ocaGroup = ''  # Empty STRING, NOT b''
+            order.ocaType = 0  # Must also clear ocaType (set to 1 in IBOrder.__init__)
+            # For crypto market orders, TIF must be IOC (Immediate or Cancel)
+            if order.orderType in (b'MKT', 'MKT'):
+                order.tif = 'IOC'
+        # For non-crypto, only set OCA group if explicitly requested
+        elif order.oco is not None:
             order.ocaGroup = self.orderbyid[order.oco.orderId].ocaGroup
+        else:
+            # Don't auto-generate OCA group UUID - just use empty STRING
+            order.ocaGroup = ''  # Empty STRING, NOT b''
+
+        # NOW call submit after we've made all necessary modifications
+        order.submit(self)
 
         self.orderbyid[order.orderId] = order
         self.ib.placeOrder(order.orderId, order.data.tradecontract, order)
@@ -363,6 +378,24 @@ class IBBroker(with_metaclass(MetaIBBroker, BrokerBase)):
                    exectype=None, valid=None,
                    tradeid=0, **kwargs):
 
+        # Check if this is a crypto order
+        is_crypto = hasattr(data, 'tradecontract') and \
+                    hasattr(data.tradecontract, 'secType') and \
+                    data.tradecontract.secType == 'CRYPTO'
+
+        # For crypto BUY orders with MARKET type, convert to cashQty
+        crypto_buy_with_cashqty = False
+        if is_crypto and action == 'BUY' and (exectype is None or exectype == Order.Market):
+            # Check if cashQty is being used (either we set it, or user passed it)
+            if 'cashQty' in kwargs or (price and size):
+                if 'cashQty' not in kwargs and price and size:
+                    # We need to calculate it
+                    cash_qty = round(abs(size) * price, 2)
+                    kwargs['cashQty'] = cash_qty
+                # When using cashQty, size must be 0 to avoid conflict
+                size = 0
+                crypto_buy_with_cashqty = True
+
         orderId=self.ib.nextOrderId()
         order = IBOrder(action, owner=owner, data=data,
                         size=size, price=price, pricelimit=plimit,
@@ -371,6 +404,23 @@ class IBBroker(with_metaclass(MetaIBBroker, BrokerBase)):
                         clientId=self.ib.clientId,
                         orderId=orderId,
                         **kwargs)
+
+        # Apply crypto-specific fixes
+        if is_crypto:
+            # Fix 1: For BUY orders with cashQty, clear totalQuantity (IBKR Error 10293)
+            # CRITICAL: Only for BUY orders! SELL orders need totalQuantity!
+            if crypto_buy_with_cashqty or (action == 'BUY' and 'cashQty' in kwargs):
+                order.totalQuantity = 0
+
+            # Fix 2: For MARKET orders, force TIF to IOC (IBKR Error 201)
+            if order.orderType == b'MKT':
+                order.tif = b'IOC'
+
+            # Fix 3: Clear OCA group AND ocaType for crypto (IBKR Error 10325)
+            # ocaType=1 is set in IBOrder.__init__ but must be 0 for crypto
+            # IMPORTANT: ocaGroup must be empty STRING, not bytes!
+            order.ocaGroup = ''  # Empty string, NOT b''
+            order.ocaType = 0
 
         order.addcomminfo(self.getcommissioninfo(data))
         return order
@@ -492,7 +542,29 @@ class IBBroker(with_metaclass(MetaIBBroker, BrokerBase)):
                 ex = self.executions.pop(cr.execId)
                 oid = ex.orderId
                 order = self.orderbyid[oid]
-                ostatus = self.ordstatus[oid].pop(ex.cumQty)
+
+                # FIX: For crypto, cumQty lookup might fail due to float precision
+                # Try exact match first, then find closest match
+                try:
+                    ostatus = self.ordstatus[oid].pop(ex.cumQty)
+                except KeyError:
+                    # Crypto fix: Find closest cumQty match (within 0.001 tolerance)
+                    closest_qty = None
+                    min_diff = float('inf')
+                    for qty in self.ordstatus[oid].keys():
+                        diff = abs(float(qty) - float(ex.cumQty))
+                        if diff < min_diff:
+                            min_diff = diff
+                            closest_qty = qty
+
+                    if closest_qty is not None and min_diff < 0.001:
+                        ostatus = self.ordstatus[oid].pop(closest_qty)
+                    else:
+                        # If no close match, just pop any value (IOC orders might have this)
+                        if self.ordstatus[oid]:
+                            ostatus = self.ordstatus[oid].popitem()[1]
+                        else:
+                            raise KeyError(f"No order status found for {oid}, cumQty={ex.cumQty}")
 
                 position = self.getposition(order.data, clone=False)
                 pprice_orig = position.price
