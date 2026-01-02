@@ -637,7 +637,7 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         ('broker_password', ''),
         ('notifyall', False),
         ('_debug', False),
-        ('reconnect', 3),  # -1 forever, 0 No, > 0 number of retries
+        ('reconnect', -1),  # -1 forever, 0 No, > 0 number of retries
         ('timeout', 3.0),  # timeout between reconnections
         ('timeoffset', True),  # Use offset to server for timestamps if needed
         ('timerefresh', 60.0),  # How often to refresh the timeoffset
@@ -797,7 +797,7 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         return False  # non-connected (including non-initialized)
 
     # @logibmsg
-    def reconnect(self, fromstart=False, resub=False):
+    def reconnect(self, fromstart=False, resub=True):
         # This method must be an invariant in that it can be called several
         # times from the same source and must be consistent. An exampler would
         # be 5 datas which are being received simultaneously and all request a
@@ -971,6 +971,9 @@ class IBStore(with_metaclass(MetaSingleton, object)):
             # Cannot connect to TWS: port, config not open, tws off (504 then)
             self.conn.disconnect()
             self.stopdatas()
+            # Attempt to reconnect
+            if not self.reconnect(resub=True):
+                logger.error("Failed to reconnect after error 502")
 
         elif msg.errorCode == 504:  # Not Connected for data op
             # Once for each data
@@ -986,6 +989,9 @@ class IBStore(with_metaclass(MetaSingleton, object)):
             # newport = int(msg.errorMsg.split('-')[-1])  # bla bla bla -7496
             self.conn.disconnect()
             self.stopdatas()
+            # Attempt to reconnect
+            if not self.reconnect(resub=True):
+                logger.error("Failed to reconnect after error 1300")
 
         elif msg.errorCode == 1100:
             # Connection lost - Notify ... datas will wait on the queue
@@ -1022,6 +1028,10 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         if self.connected():
             self.conn.disconnect()
             self.stopdatas()
+
+        # Attempt to reconnect
+        if not self.reconnect(resub=True):
+            logger.error("Failed to reconnect after connection closed")
     
     def updateAccountTime(self, timeStamp):
         logger.debug(f"timeStamp: {timeStamp}")
