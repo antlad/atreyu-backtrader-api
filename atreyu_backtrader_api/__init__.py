@@ -6,4 +6,4 @@ from .custom_logger import setup_custom_logger
 __all__ = [
   'IBStore', 'IBBroker', 'IBData', 'setup_custom_logger',
 ]
-__version__ = '0.1.4'
+__version__ = '0.1.6'
