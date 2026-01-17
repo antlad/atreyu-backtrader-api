@@ -30,6 +30,7 @@ import itertools
 import random
 import threading
 import time
+import sys
 
 from backtrader import TimeFrame, Position
 from backtrader.metabase import MetaParams
@@ -642,6 +643,7 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         ('timeoffset', True),  # Use offset to server for timestamps if needed
         ('timerefresh', 60.0),  # How often to refresh the timeoffset
         ('indcash', True),  # Treat IND codes as CASH elements
+        ('stop_on_disconnect', False),  # Raise exception on disconnect to stop backtrader
     )
 
     @classmethod
@@ -913,6 +915,10 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         # All errors are logged to the environment (cerebro), because many
         # errors in Interactive Brokers are actually informational and many may
         # actually be of interest to the user
+        if msg.errorCode == 504 and self.p.stop_on_disconnect:
+            self._env.runstop()
+            sys.exit(1)
+
         if msg.reqId > 0:
             logger.error(f"{msg}")
             print(f"Error: {msg}")
@@ -1022,7 +1028,7 @@ class IBStore(with_metaclass(MetaSingleton, object)):
         if self.connected():
             self.conn.disconnect()
             self.stopdatas()
-    
+
     def updateAccountTime(self, timeStamp):
         logger.debug(f"timeStamp: {timeStamp}")
 

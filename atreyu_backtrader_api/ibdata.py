@@ -261,6 +261,7 @@ class IBData(with_metaclass(MetaIBData, DataBase)):
         ('tradename', None),  # use a different asset as order target
         ('numberOfTicks', 1000),  # Number of distinct data points. Max is 1000 per request.
         ('ignoreSize', False),  # Omit updates that reflect only changes in size, and not price. Applicable to Bid_Ask data requests.
+        ('stop_on_disconnect', False),  # Stop cerebro when reconnect is triggered
     )
 
     _store = ibstore.IBStore
