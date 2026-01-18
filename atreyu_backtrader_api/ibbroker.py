@@ -174,7 +174,9 @@ class IBOrder(OrderBase, ibapi.order.Order):
                 # value expected in % format ... multiply 100.0
                 self.m_trailingPercent = self.trailpercent * 100.0
 
-        self.totalQuantity = abs(self.size)  # ib takes only positives
+        # Round to 6 decimals for crypto, keep as int for stocks/futures
+        qty = round(abs(self.size), 6)
+        self.totalQuantity = int(qty) if qty == int(qty) else qty
 
         # self.m_transmit = self.transmit
         if self.parent is not None:
