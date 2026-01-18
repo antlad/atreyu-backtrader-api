@@ -175,7 +175,7 @@ class IBOrder(OrderBase, ibapi.order.Order):
                 self.m_trailingPercent = self.trailpercent * 100.0
 
         # Round to 8 decimals for crypto, keep as int for stocks/futures
-        qty = round(abs(self.size), 8)
+        qty = round(abs(self.size), 6)
         self.totalQuantity = int(qty) if qty == int(qty) else qty
 
         # self.m_transmit = self.transmit
